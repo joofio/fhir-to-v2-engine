@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FHIR ↔ HL7v2 Engine</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+  <nav class="navbar">
+    <span class="brand">FHIR ↔ HL7v2 Engine</span>
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li><a href="/ui/mappings">Mappings</a></li>
+      <li><a href="/ui/convert">Convert</a></li>
+      <li><a href="/docs" target="_blank">API Docs</a></li>
+    </ul>
+  </nav>
+
+  <main class="hero">
+    <h1>FHIR ↔ HL7v2 Mapping Engine</h1>
+    <p class="subtitle">
+      Bidirectional conversion between HL7 FHIR resources and HL7v2 messages
+      using FHIR <strong>ConceptMaps</strong> for code translation.
+    </p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h2>📋 Mappings</h2>
+        <p>Browse, create, and upload ConceptMaps used for concept translation.</p>
+        <a href="/ui/mappings" class="btn">View Mappings</a>
+        <a href="/ui/mappings/new" class="btn btn-secondary">Add Mapping</a>
+      </div>
+
+      <div class="card">
+        <h2>🔄 Convert</h2>
+        <p>Convert a FHIR resource to an HL7v2 message or vice versa.</p>
+        <a href="/ui/convert" class="btn">Open Converter</a>
+      </div>
+
+      <div class="card">
+        <h2>📖 API Docs</h2>
+        <p>Interactive Swagger UI for exploring and testing the REST API.</p>
+        <a href="/docs" target="_blank" class="btn">Open Swagger</a>
+        <a href="/redoc" target="_blank" class="btn btn-secondary">ReDoc</a>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>FHIR ↔ HL7v2 Engine &mdash; open source healthcare interoperability</p>
+  </footer>
+</body>
+</html>

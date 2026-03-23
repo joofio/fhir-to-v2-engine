@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>New Mapping – FHIR ↔ HL7v2 Engine</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+  <nav class="navbar">
+    <span class="brand">FHIR ↔ HL7v2 Engine</span>
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li><a href="/ui/mappings" class="active">Mappings</a></li>
+      <li><a href="/ui/convert">Convert</a></li>
+      <li><a href="/docs" target="_blank">API Docs</a></li>
+    </ul>
+  </nav>
+
+  <main class="container">
+    <h1>Add ConceptMap</h1>
+
+    <!-- Tab switcher -->
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('form', this)">Manual Form</button>
+      <button class="tab" onclick="switchTab('upload', this)">Upload JSON File</button>
+      <button class="tab" onclick="switchTab('paste', this)">Paste JSON</button>
+    </div>
+
+    <!-- Manual form -->
+    <section id="tab-form" class="tab-panel">
+      <form id="create-form" onsubmit="submitForm(event)">
+        <div class="form-group">
+          <label for="name">Name <span class="required">*</span></label>
+          <input type="text" id="name" name="name" required placeholder="gender-map"/>
+        </div>
+        <div class="form-group">
+          <label for="title">Title</label>
+          <input type="text" id="title" name="title" placeholder="Gender Code Mapping"/>
+        </div>
+        <div class="form-group">
+          <label for="description">Description</label>
+          <textarea id="description" name="description" rows="2"
+                    placeholder="Maps FHIR administrative-gender to HL7v2 gender codes"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="source_system">Source System <span class="required">*</span></label>
+            <input type="text" id="source_system" name="source_system" required
+                   placeholder="http://hl7.org/fhir/administrative-gender"/>
+          </div>
+          <div class="form-group">
+            <label for="target_system">Target System <span class="required">*</span></label>
+            <input type="text" id="target_system" name="target_system" required
+                   placeholder="http://terminology.hl7.org/CodeSystem/v2-0001"/>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="version">Version</label>
+          <input type="text" id="version" name="version" value="1.0.0"/>
+        </div>
+
+        <h3>Mapping Groups</h3>
+        <p class="hint">
+          Define source → target code translations. Each group can specify optional
+          source/target systems. Add as many elements as needed.
+        </p>
+        <div id="groups-container">
+          <!-- Groups added dynamically -->
+        </div>
+        <button type="button" class="btn btn-secondary" onclick="addGroup()">+ Add Group</button>
+
+        <div class="form-actions">
+          <button type="submit" class="btn">Save ConceptMap</button>
+          <a href="/ui/mappings" class="btn btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </section>
+
+    <!-- File upload -->
+    <section id="tab-upload" class="tab-panel hidden">
+      <p class="hint">
+        Upload a FHIR ConceptMap JSON file (<code>resourceType: "ConceptMap"</code>)
+        or a simplified JSON object matching the ConceptMap schema.
+      </p>
+      <form id="upload-form" onsubmit="submitUpload(event)" enctype="multipart/form-data">
+        <div class="form-group">
+          <label for="file">JSON File</label>
+          <input type="file" id="file" name="file" accept=".json,application/json"/>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn">Upload</button>
+          <a href="/ui/mappings" class="btn btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </section>
+
+    <!-- Paste JSON -->
+    <section id="tab-paste" class="tab-panel hidden">
+      <p class="hint">Paste a FHIR ConceptMap JSON or the simplified schema below.</p>
+      <form id="paste-form" onsubmit="submitPaste(event)">
+        <div class="form-group">
+          <label for="json-paste">JSON</label>
+          <textarea id="json-paste" rows="18"
+                    placeholder='{ "name": "my-map", "source_system": "...", "target_system": "...", "groups": [] }'></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn">Save</button>
+          <a href="/ui/mappings" class="btn btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </section>
+
+    <div id="msg" class="msg hidden"></div>
+  </main>
+
+  <footer><p>FHIR ↔ HL7v2 Engine</p></footer>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    let groupCount = 0;
+
+    function switchTab(name, btn) {
+      document.querySelectorAll(".tab-panel").forEach(p => p.classList.add("hidden"));
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.getElementById(`tab-${name}`).classList.remove("hidden");
+      btn.classList.add("active");
+    }
+
+    function addGroup() {
+      const idx = groupCount++;
+      const container = document.getElementById("groups-container");
+      const div = document.createElement("div");
+      div.className = "group-block";
+      div.dataset.idx = idx;
+      div.innerHTML = `
+        <div class="group-header">
+          <strong>Group ${idx + 1}</strong>
+          <button type="button" class="btn btn-sm btn-danger"
+                  onclick="removeGroup(${idx})">Remove</button>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Group Source System (optional)</label>
+            <input type="text" name="group_source_${idx}"
+                   placeholder="(leave blank to use mapping source system)"/>
+          </div>
+          <div class="form-group">
+            <label>Group Target System (optional)</label>
+            <input type="text" name="group_target_${idx}"
+                   placeholder="(leave blank to use mapping target system)"/>
+          </div>
+        </div>
+        <div id="elements-${idx}"></div>
+        <button type="button" class="btn btn-sm btn-secondary"
+                onclick="addElement(${idx})">+ Add Element</button>
+      `;
+      container.appendChild(div);
+    }
+
+    function removeGroup(idx) {
+      document.querySelector(`[data-idx="${idx}"]`).remove();
+    }
+
+    let elemCount = {};
+    function addElement(gIdx) {
+      elemCount[gIdx] = (elemCount[gIdx] || 0) + 1;
+      const eIdx = elemCount[gIdx];
+      const container = document.getElementById(`elements-${gIdx}`);
+      const div = document.createElement("div");
+      div.className = "element-row";
+      div.id = `elem-${gIdx}-${eIdx}`;
+      div.innerHTML = `
+        <div class="form-row">
+          <div class="form-group">
+            <label>Source Code</label>
+            <input type="text" name="elem_src_${gIdx}_${eIdx}" placeholder="male"/>
+          </div>
+          <div class="form-group">
+            <label>Target Code</label>
+            <input type="text" name="elem_tgt_${gIdx}_${eIdx}" placeholder="M"/>
+          </div>
+          <div class="form-group">
+            <label>Equivalence</label>
+            <select name="elem_eq_${gIdx}_${eIdx}">
+              <option value="equivalent">equivalent</option>
+              <option value="equal">equal</option>
+              <option value="wider">wider</option>
+              <option value="narrower">narrower</option>
+              <option value="relatedto">relatedto</option>
+              <option value="unmatched">unmatched</option>
+            </select>
+          </div>
+          <div class="form-group" style="align-self:flex-end">
+            <button type="button" class="btn btn-sm btn-danger"
+                    onclick="document.getElementById('elem-${gIdx}-${eIdx}').remove()">✕</button>
+          </div>
+        </div>
+      `;
+      container.appendChild(div);
+    }
+
+    async function submitForm(e) {
+      e.preventDefault();
+      const form = document.getElementById("create-form");
+
+      const payload = {
+        name: form.name.value,
+        title: form.title.value || null,
+        description: form.description.value || null,
+        source_system: form.source_system.value,
+        target_system: form.target_system.value,
+        version: form.version.value || "1.0.0",
+        groups: [],
+      };
+
+      // Collect groups
+      document.querySelectorAll(".group-block").forEach(g => {
+        const idx = g.dataset.idx;
+        const groupSource = form[`group_source_${idx}`]?.value || null;
+        const groupTarget = form[`group_target_${idx}`]?.value || null;
+        const elements = [];
+        g.querySelectorAll(".element-row").forEach(row => {
+          const inputs = row.querySelectorAll("input, select");
+          // inputs[0]=src, inputs[1]=tgt, inputs[2]=eq
+          const src = inputs[0]?.value;
+          const tgt = inputs[1]?.value;
+          const eq = inputs[2]?.value || "equivalent";
+          if (src && tgt) {
+            elements.push({ code: src, target: [{ code: tgt, equivalence: eq }] });
+          }
+        });
+        payload.groups.push({ source: groupSource, target: groupTarget, elements });
+      });
+
+      const resp = await postJSON("/mappings", payload);
+      if (resp.ok) {
+        window.location.href = "/ui/mappings";
+      } else {
+        showMsg("Error: " + JSON.stringify(await resp.json()), "error");
+      }
+    }
+
+    async function submitUpload(e) {
+      e.preventDefault();
+      const fileInput = document.getElementById("file");
+      if (!fileInput.files.length) { showMsg("Please choose a file.", "error"); return; }
+      const fd = new FormData();
+      fd.append("file", fileInput.files[0]);
+      const resp = await fetch("/mappings/upload", { method: "POST", body: fd });
+      if (resp.ok) {
+        window.location.href = "/ui/mappings";
+      } else {
+        showMsg("Error: " + JSON.stringify(await resp.json()), "error");
+      }
+    }
+
+    async function submitPaste(e) {
+      e.preventDefault();
+      const raw = document.getElementById("json-paste").value;
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { showMsg("Invalid JSON", "error"); return; }
+      const resp = await postJSON("/mappings", parsed);
+      if (resp.ok) {
+        window.location.href = "/ui/mappings";
+      } else {
+        showMsg("Error: " + JSON.stringify(await resp.json()), "error");
+      }
+    }
+
+    function showMsg(text, type) {
+      const el = document.getElementById("msg");
+      el.textContent = text;
+      el.className = `msg ${type}`;
+    }
+  </script>
+</body>
+</html>

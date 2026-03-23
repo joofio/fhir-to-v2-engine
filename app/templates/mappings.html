@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mappings – FHIR ↔ HL7v2 Engine</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+  <nav class="navbar">
+    <span class="brand">FHIR ↔ HL7v2 Engine</span>
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li><a href="/ui/mappings" class="active">Mappings</a></li>
+      <li><a href="/ui/convert">Convert</a></li>
+      <li><a href="/docs" target="_blank">API Docs</a></li>
+    </ul>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1>ConceptMaps</h1>
+      <a href="/ui/mappings/new" class="btn">+ New Mapping</a>
+    </div>
+
+    {% if mappings %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Title</th>
+          <th>Source System</th>
+          <th>Target System</th>
+          <th>Status</th>
+          <th>Version</th>
+          <th>Groups</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in mappings %}
+        <tr>
+          <td><code>{{ m.name }}</code></td>
+          <td>{{ m.title or "—" }}</td>
+          <td class="small">{{ m.source_system }}</td>
+          <td class="small">{{ m.target_system }}</td>
+          <td><span class="badge badge-{{ m.status }}">{{ m.status }}</span></td>
+          <td>{{ m.version }}</td>
+          <td>{{ m.groups | length }}</td>
+          <td>
+            <button class="btn btn-sm btn-secondary"
+                    onclick="viewMapping('{{ m.id }}')">View</button>
+            <button class="btn btn-sm btn-danger"
+                    onclick="deleteMapping('{{ m.id }}', this)">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <p>No ConceptMaps found. <a href="/ui/mappings/new">Create one</a> to get started.</p>
+    </div>
+    {% endif %}
+  </main>
+
+  <!-- Modal for viewing a mapping -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-content">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <h2>ConceptMap Detail</h2>
+      <pre id="modal-body"></pre>
+    </div>
+  </div>
+
+  <footer>
+    <p>FHIR ↔ HL7v2 Engine</p>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    async function viewMapping(id) {
+      const data = await fetchJSON(`/mappings/${id}`);
+      document.getElementById("modal-body").textContent = JSON.stringify(data, null, 2);
+      document.getElementById("modal").classList.remove("hidden");
+    }
+
+    function closeModal() {
+      document.getElementById("modal").classList.add("hidden");
+    }
+
+    async function deleteMapping(id, btn) {
+      if (!confirm("Delete this ConceptMap?")) return;
+      const resp = await fetch(`/mappings/${id}`, { method: "DELETE" });
+      if (resp.ok || resp.status === 204) {
+        btn.closest("tr").remove();
+      } else {
+        alert("Failed to delete.");
+      }
+    }
+  </script>
+</body>
+</html>
