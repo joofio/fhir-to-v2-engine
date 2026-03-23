@@ -83,9 +83,10 @@ def fhir_to_v2(
     """
     Convert a FHIR resource (dict) to an HL7v2 message string.
 
+    *concept_map* is required via the API and drives all code-translation rules.
     Currently supports Patient and Observation resources and produces the
     common segments (MSH, EVN, PID, OBX).  Unknown resource types fall back
-    to a minimal MSH-only message.
+    to NTE-segment encoding.
     """
     resource_type = fhir_resource.get("resourceType", "Unknown")
     warnings: list[str] = []
@@ -272,6 +273,8 @@ def v2_to_fhir(
 ) -> ConversionResult:
     """
     Parse an HL7v2 message string and convert it to a FHIR resource (or Bundle).
+
+    *concept_map* is required via the API and drives all code-translation rules.
 
     When *target_resource_type* is ``None`` or ``"auto"`` the function
     auto-detects the appropriate FHIR resource type(s) from the message

@@ -53,7 +53,7 @@ class ConvertFHIRToV2Request(BaseModel):
     """Request body for FHIR → HL7v2 conversion."""
 
     fhir_resource: dict[str, Any]
-    concept_map_id: str | None = None
+    concept_map_id: str
     message_type: str = "ADT_A01"
 
 
@@ -61,7 +61,7 @@ class ConvertV2ToFHIRRequest(BaseModel):
     """Request body for HL7v2 → FHIR conversion."""
 
     v2_message: str
-    concept_map_id: str | None = None
+    concept_map_id: str
     target_resource_type: str | None = None
 
 
