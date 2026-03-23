@@ -5,15 +5,31 @@ This service handles:
 - Parsing HL7v2 messages using the `hl7` library
 - Building/reading FHIR resources using `fhir.resources`
 - Applying ConceptMap translations to code values
+- Auto-detecting the target FHIR resource type from HL7v2 message segments
+- Producing FHIR Bundles when a single HL7v2 message maps to multiple resources
 """
 from __future__ import annotations
 
+import json
 import re
+import uuid
 from typing import Any
 
 import hl7
 
 from app.models import ConceptMap, ConversionResult
+
+
+# ---------------------------------------------------------------------------
+# Segment → resource-type registry (extensible)
+# ---------------------------------------------------------------------------
+
+#: Maps HL7v2 segment names to the FHIR resource type they primarily represent.
+#: Add new entries here as support for more resource types is introduced.
+_SEGMENT_RESOURCE_MAP: dict[str, str] = {
+    "PID": "Patient",
+    "OBX": "Observation",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +83,10 @@ def fhir_to_v2(
     """
     Convert a FHIR resource (dict) to an HL7v2 message string.
 
+    *concept_map* is required via the API and drives all code-translation rules.
     Currently supports Patient and Observation resources and produces the
     common segments (MSH, EVN, PID, OBX).  Unknown resource types fall back
-    to a minimal MSH-only message.
+    to NTE-segment encoding.
     """
     resource_type = fhir_resource.get("resourceType", "Unknown")
     warnings: list[str] = []
@@ -82,10 +99,10 @@ def fhir_to_v2(
         segments = _observation_to_v2(fhir_resource, concept_map, warnings)
     else:
         warnings.append(
-            f"Resource type '{resource_type}' is not fully supported; "
-            "only MSH segment generated."
+            f"Resource type '{resource_type}' is not natively supported; "
+            "using generic NTE-segment encoding."
         )
-        segments = []
+        segments = _generic_resource_to_v2(fhir_resource, warnings)
 
     lines = [msh] + segments
     v2_message = "\r".join(lines)
@@ -216,19 +233,56 @@ def _observation_to_v2(
     return segments
 
 
+def _generic_resource_to_v2(
+    resource: dict[str, Any],
+    warnings: list[str],
+) -> list[str]:
+    """
+    Generic fallback encoder: represent any FHIR resource as a series of
+    NTE (Notes and Comments) segments so that the data is not silently dropped.
+
+    The first NTE line identifies the resource type and id; subsequent lines
+    carry each top-level field as ``key=<json-encoded-value>``.
+    """
+    resource_type = resource.get("resourceType", "Unknown")
+    resource_id = resource.get("id", "")
+    segments: list[str] = [f"NTE|1|L|FHIR:{resource_type}:{resource_id}"]
+
+    index = 2
+    for key, val in resource.items():
+        if key in ("resourceType", "id"):
+            continue
+        if isinstance(val, (dict, list)):
+            val_str = json.dumps(val, separators=(",", ":"))
+        else:
+            val_str = str(val)
+        segments.append(f"NTE|{index}|L|{key}={val_str}")
+        index += 1
+
+    return segments
+
+
 # ---------------------------------------------------------------------------
 # HL7v2 → FHIR
 # ---------------------------------------------------------------------------
 
 def v2_to_fhir(
     v2_message: str,
-    target_resource_type: str = "Patient",
+    target_resource_type: str | None = None,
     concept_map: ConceptMap | None = None,
 ) -> ConversionResult:
     """
-    Parse an HL7v2 message string and convert it to a FHIR resource dict.
+    Parse an HL7v2 message string and convert it to a FHIR resource (or Bundle).
 
-    Supports Patient (from PID) and Observation (from OBX) conversion.
+    *concept_map* is required via the API and drives all code-translation rules.
+
+    When *target_resource_type* is ``None`` or ``"auto"`` the function
+    auto-detects the appropriate FHIR resource type(s) from the message
+    segments.  If more than one resource type is detected a FHIR Bundle is
+    returned; otherwise the single resource is returned directly.
+
+    Explicit values of ``"Patient"`` or ``"Observation"`` are still honoured
+    for backward compatibility.
     """
     warnings: list[str] = []
 
@@ -241,7 +295,23 @@ def v2_to_fhir(
         warnings.append(f"HL7v2 parse warning: {exc}")
         msg = None
 
-    if target_resource_type == "Patient":
+    # Resolve the desired target resource type(s)
+    auto_mode = target_resource_type is None or (
+        isinstance(target_resource_type, str) and target_resource_type.lower() == "auto"
+    )
+
+    if auto_mode:
+        detected = _detect_resource_types_from_v2(msg, v2_message)
+        if len(detected) == 0:
+            warnings.append(
+                "Could not auto-detect a target resource type; returning raw segment data."
+            )
+            result: Any = _raw_segments(v2_message)
+        elif len(detected) == 1:
+            result = _convert_single_resource(detected[0], msg, v2_message, concept_map, warnings)
+        else:
+            result = _v2_to_bundle(detected, msg, v2_message, concept_map, warnings)
+    elif target_resource_type == "Patient":
         result = _v2_to_patient(msg, v2_message, concept_map, warnings)
     elif target_resource_type == "Observation":
         result = _v2_to_observation(msg, v2_message, concept_map, warnings)
@@ -259,6 +329,90 @@ def v2_to_fhir(
         applied_map_id=concept_map.id if concept_map else None,
         warnings=warnings,
     )
+
+
+def _detect_resource_types_from_v2(msg: Any, raw: str) -> list[str]:
+    """
+    Inspect the parsed HL7v2 *msg* (or raw text as fallback) and return an
+    ordered list of FHIR resource types that can be extracted from it.
+
+    The order matches the natural reading order of the segments so that a
+    Bundle's entries follow the clinical narrative (Patient first, then
+    Observations, etc.).
+    """
+    if msg is None:
+        # Fall back to a simple text scan
+        detected: list[str] = []
+        for segment_name, resource_type in _SEGMENT_RESOURCE_MAP.items():
+            pattern = rf"(^|\r){re.escape(segment_name)}\|"
+            if re.search(pattern, raw):
+                if resource_type not in detected:
+                    detected.append(resource_type)
+        return detected
+
+    detected = []
+    for segment_name, resource_type in _SEGMENT_RESOURCE_MAP.items():
+        try:
+            msg.segment(segment_name)
+            if resource_type not in detected:
+                detected.append(resource_type)
+        except Exception:
+            pass
+
+    # If nothing found via segments, try the MSH-9 message-type field
+    if not detected:
+        msg_type_field = _get_field(msg, "MSH", 9)
+        msg_type = msg_type_field.split("^")[0].upper()
+        if msg_type.startswith("ADT"):
+            detected = ["Patient"]
+        elif msg_type.startswith("ORU"):
+            detected = ["Patient", "Observation"]
+        elif msg_type.startswith("ORM"):
+            detected = ["Patient"]
+
+    return detected
+
+
+def _convert_single_resource(
+    resource_type: str,
+    msg: Any,
+    raw: str,
+    concept_map: ConceptMap | None,
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Convert a single detected resource type from the HL7v2 message."""
+    if resource_type == "Patient":
+        return _v2_to_patient(msg, raw, concept_map, warnings)
+    if resource_type == "Observation":
+        return _v2_to_observation(msg, raw, concept_map, warnings)
+    warnings.append(f"No dedicated converter for '{resource_type}'; skipping.")
+    return {"resourceType": resource_type}
+
+
+def _v2_to_bundle(
+    resource_types: list[str],
+    msg: Any,
+    raw: str,
+    concept_map: ConceptMap | None,
+    warnings: list[str],
+) -> dict[str, Any]:
+    """
+    Build a FHIR Bundle (type: *message*) containing one entry per detected
+    resource type extracted from the HL7v2 message.
+    """
+    entries: list[dict[str, Any]] = []
+    for resource_type in resource_types:
+        resource = _convert_single_resource(resource_type, msg, raw, concept_map, warnings)
+        resource_id = resource.get("id", "")
+        entries.append({
+            "fullUrl": f"urn:uuid:{resource_id}" if resource_id else f"urn:uuid:{uuid.uuid4()}",
+            "resource": resource,
+        })
+    return {
+        "resourceType": "Bundle",
+        "type": "message",
+        "entry": entries,
+    }
 
 
 def _get_field(msg: Any, segment_name: str, field_index: int, default: str = "") -> str:

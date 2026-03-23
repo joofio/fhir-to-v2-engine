@@ -50,6 +50,11 @@ GENDER_MAP_PAYLOAD = {
 }
 
 
+def _create_gender_map() -> str:
+    """Create the gender ConceptMap and return its id."""
+    return client.post("/mappings", json=GENDER_MAP_PAYLOAD).json()["id"]
+
+
 def test_create_and_list_mapping():
     resp = client.post("/mappings", json=GENDER_MAP_PAYLOAD)
     assert resp.status_code == 201
@@ -133,10 +138,11 @@ PATIENT_FHIR = {
 }
 
 
-def test_fhir_patient_to_v2_no_map():
+def test_fhir_patient_to_v2():
+    cm_id = _create_gender_map()
     resp = client.post(
         "/convert/fhir-to-v2",
-        json={"fhir_resource": PATIENT_FHIR},
+        json={"fhir_resource": PATIENT_FHIR, "concept_map_id": cm_id},
     )
     assert resp.status_code == 200
     result = resp.json()
@@ -150,12 +156,12 @@ def test_fhir_patient_to_v2_no_map():
 
 
 def test_fhir_patient_to_v2_with_map():
-    cm = client.post("/mappings", json=GENDER_MAP_PAYLOAD).json()
+    cm_id = _create_gender_map()
     resp = client.post(
         "/convert/fhir-to-v2",
         json={
             "fhir_resource": PATIENT_FHIR,
-            "concept_map_id": cm["id"],
+            "concept_map_id": cm_id,
             "message_type": "ADT_A01",
         },
     )
@@ -166,6 +172,7 @@ def test_fhir_patient_to_v2_with_map():
 
 
 def test_fhir_observation_to_v2():
+    cm_id = _create_gender_map()
     obs = {
         "resourceType": "Observation",
         "status": "final",
@@ -180,7 +187,7 @@ def test_fhir_observation_to_v2():
     }
     resp = client.post(
         "/convert/fhir-to-v2",
-        json={"fhir_resource": obs, "message_type": "ORU_R01"},
+        json={"fhir_resource": obs, "concept_map_id": cm_id, "message_type": "ORU_R01"},
     )
     assert resp.status_code == 200
     result = resp.json()["result"]
@@ -189,8 +196,12 @@ def test_fhir_observation_to_v2():
 
 
 def test_fhir_to_v2_unknown_resource():
+    cm_id = _create_gender_map()
     unknown = {"resourceType": "Medication", "id": "med-001"}
-    resp = client.post("/convert/fhir-to-v2", json={"fhir_resource": unknown})
+    resp = client.post(
+        "/convert/fhir-to-v2",
+        json={"fhir_resource": unknown, "concept_map_id": cm_id},
+    )
     assert resp.status_code == 200
     result = resp.json()
     assert "MSH" in result["result"]
@@ -205,6 +216,15 @@ def test_fhir_to_v2_unknown_map_id():
     assert resp.status_code == 404
 
 
+def test_fhir_to_v2_missing_concept_map_id():
+    """concept_map_id is mandatory; omitting it should return 422 Unprocessable Entity."""
+    resp = client.post(
+        "/convert/fhir-to-v2",
+        json={"fhir_resource": PATIENT_FHIR},
+    )
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # HL7v2 → FHIR
 # ---------------------------------------------------------------------------
@@ -216,10 +236,15 @@ V2_PATIENT_MSG = (
 )
 
 
-def test_v2_patient_to_fhir_no_map():
+def test_v2_patient_to_fhir():
+    cm_id = _create_gender_map()
     resp = client.post(
         "/convert/v2-to-fhir",
-        json={"v2_message": V2_PATIENT_MSG, "target_resource_type": "Patient"},
+        json={
+            "v2_message": V2_PATIENT_MSG,
+            "target_resource_type": "Patient",
+            "concept_map_id": cm_id,
+        },
     )
     assert resp.status_code == 200
     result = resp.json()
@@ -232,13 +257,13 @@ def test_v2_patient_to_fhir_no_map():
 
 
 def test_v2_patient_to_fhir_gender_mapped():
-    cm = client.post("/mappings", json=GENDER_MAP_PAYLOAD).json()
+    cm_id = _create_gender_map()
     resp = client.post(
         "/convert/v2-to-fhir",
         json={
             "v2_message": V2_PATIENT_MSG,
             "target_resource_type": "Patient",
-            "concept_map_id": cm["id"],
+            "concept_map_id": cm_id,
         },
     )
     assert resp.status_code == 200
@@ -247,13 +272,18 @@ def test_v2_patient_to_fhir_gender_mapped():
 
 
 def test_v2_observation_to_fhir():
+    cm_id = _create_gender_map()
     v2_obs = (
         "MSH|^~\\&|SEND|FAC|REC|FAC|20260101120000||ORU^R01|MSG002|P|2.5\r"
         "OBX|1|NM|8867-4^Heart rate^LN||72|bpm"
     )
     resp = client.post(
         "/convert/v2-to-fhir",
-        json={"v2_message": v2_obs, "target_resource_type": "Observation"},
+        json={
+            "v2_message": v2_obs,
+            "target_resource_type": "Observation",
+            "concept_map_id": cm_id,
+        },
     )
     assert resp.status_code == 200
     fhir = resp.json()["result"]
@@ -263,9 +293,14 @@ def test_v2_observation_to_fhir():
 
 
 def test_v2_to_fhir_unknown_resource_type():
+    cm_id = _create_gender_map()
     resp = client.post(
         "/convert/v2-to-fhir",
-        json={"v2_message": V2_PATIENT_MSG, "target_resource_type": "Encounter"},
+        json={
+            "v2_message": V2_PATIENT_MSG,
+            "target_resource_type": "Encounter",
+            "concept_map_id": cm_id,
+        },
     )
     assert resp.status_code == 200
     result = resp.json()
@@ -278,6 +313,98 @@ def test_v2_to_fhir_unknown_map_id():
         json={"v2_message": V2_PATIENT_MSG, "concept_map_id": "no-such-id"},
     )
     assert resp.status_code == 404
+
+
+def test_v2_to_fhir_missing_concept_map_id():
+    """concept_map_id is mandatory; omitting it should return 422 Unprocessable Entity."""
+    resp = client.post(
+        "/convert/v2-to-fhir",
+        json={"v2_message": V2_PATIENT_MSG},
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection: HL7v2 → FHIR (no target_resource_type provided)
+# ---------------------------------------------------------------------------
+
+def test_v2_auto_detect_patient_from_adt():
+    """ADT message with PID → auto-detected as Patient."""
+    cm_id = _create_gender_map()
+    resp = client.post(
+        "/convert/v2-to-fhir",
+        json={"v2_message": V2_PATIENT_MSG, "concept_map_id": cm_id},
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["source_format"] == "HL7v2"
+    assert result["target_format"] == "FHIR"
+    fhir = result["result"]
+    assert fhir["resourceType"] == "Patient"
+    assert fhir.get("id") == "pt-001"
+
+
+def test_v2_auto_detect_bundle_from_oru():
+    """ORU message with both PID and OBX → auto-detected as Bundle."""
+    cm_id = _create_gender_map()
+    oru_msg = (
+        "MSH|^~\\&|SEND|FAC|REC|FAC|20260101120000||ORU^R01|MSG003|P|2.5\r"
+        "PID|1|MRN-002|pt-002||Doe^Jane||19900101|F\r"
+        "OBX|1|NM|8867-4^Heart rate^LN||60|bpm"
+    )
+    resp = client.post(
+        "/convert/v2-to-fhir",
+        json={"v2_message": oru_msg, "concept_map_id": cm_id},
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    fhir = result["result"]
+    assert fhir["resourceType"] == "Bundle"
+    resource_types = [e["resource"]["resourceType"] for e in fhir["entry"]]
+    assert "Patient" in resource_types
+    assert "Observation" in resource_types
+
+
+def test_v2_auto_detect_explicit_auto_string():
+    """Passing target_resource_type='auto' is equivalent to omitting it."""
+    cm_id = _create_gender_map()
+    resp = client.post(
+        "/convert/v2-to-fhir",
+        json={
+            "v2_message": V2_PATIENT_MSG,
+            "target_resource_type": "auto",
+            "concept_map_id": cm_id,
+        },
+    )
+    assert resp.status_code == 200
+    fhir = resp.json()["result"]
+    assert fhir["resourceType"] == "Patient"
+
+
+# ---------------------------------------------------------------------------
+# Generic FHIR → HL7v2 (unsupported resource type)
+# ---------------------------------------------------------------------------
+
+def test_fhir_generic_resource_produces_nte_segments():
+    """Unknown FHIR resource types are encoded as NTE segments (not dropped)."""
+    cm_id = _create_gender_map()
+    medication = {
+        "resourceType": "Medication",
+        "id": "med-001",
+        "code": {"text": "Aspirin 100 mg"},
+        "status": "active",
+    }
+    resp = client.post(
+        "/convert/fhir-to-v2",
+        json={"fhir_resource": medication, "concept_map_id": cm_id},
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    v2 = result["result"]
+    assert "MSH" in v2
+    assert "NTE" in v2
+    assert "Medication" in v2
+    assert len(result["warnings"]) > 0
 
 
 # ---------------------------------------------------------------------------
