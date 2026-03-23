@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Convert – FHIR ↔ HL7v2 Engine</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+  <nav class="navbar">
+    <span class="brand">FHIR ↔ HL7v2 Engine</span>
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li><a href="/ui/mappings">Mappings</a></li>
+      <li><a href="/ui/convert" class="active">Convert</a></li>
+      <li><a href="/docs" target="_blank">API Docs</a></li>
+    </ul>
+  </nav>
+
+  <main class="container">
+    <h1>Convert</h1>
+
+    <!-- Direction tabs -->
+    <div class="tabs">
+      <button class="tab active" onclick="switchDir('fhir2v2', this)">FHIR → HL7v2</button>
+      <button class="tab" onclick="switchDir('v22fhir', this)">HL7v2 → FHIR</button>
+    </div>
+
+    <!-- ── FHIR → v2 ──────────────────────────── -->
+    <section id="panel-fhir2v2">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="fhir-msg-type">Message Type</label>
+          <select id="fhir-msg-type">
+            <option value="ADT_A01">ADT_A01 – Admit</option>
+            <option value="ADT_A08">ADT_A08 – Update</option>
+            <option value="ORU_R01">ORU_R01 – Observation</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="fhir-map-sel">ConceptMap (optional)</label>
+          <select id="fhir-map-sel">
+            <option value="">— None —</option>
+            {% for m in mappings %}
+            <option value="{{ m.id }}">{{ m.name }}{% if m.title %} – {{ m.title }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="split-pane">
+        <div class="pane">
+          <label for="fhir-input">FHIR Resource (JSON)</label>
+          <textarea id="fhir-input" rows="20" spellcheck="false"
+                    placeholder='{ "resourceType": "Patient", "id": "pt-001", ... }'></textarea>
+          <button class="btn" onclick="loadFHIRExample()">Load Example</button>
+        </div>
+        <div class="pane">
+          <label>HL7v2 Output</label>
+          <pre id="fhir-output" class="output-box"></pre>
+          <div id="fhir-warnings" class="warnings hidden"></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="runFhir2V2()">▶ Convert</button>
+    </section>
+
+    <!-- ── v2 → FHIR ──────────────────────────── -->
+    <section id="panel-v22fhir" class="hidden">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="v2-resource-type">Target Resource Type</label>
+          <select id="v2-resource-type">
+            <option value="Patient">Patient</option>
+            <option value="Observation">Observation</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="v2-map-sel">ConceptMap (optional)</label>
+          <select id="v2-map-sel">
+            <option value="">— None —</option>
+            {% for m in mappings %}
+            <option value="{{ m.id }}">{{ m.name }}{% if m.title %} – {{ m.title }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="split-pane">
+        <div class="pane">
+          <label for="v2-input">HL7v2 Message</label>
+          <textarea id="v2-input" rows="20" spellcheck="false"
+                    placeholder="MSH|^~\&|SEND|FAC|REC|FAC|20260101120000||ADT^A01|..."></textarea>
+          <button class="btn" onclick="loadV2Example()">Load Example</button>
+        </div>
+        <div class="pane">
+          <label>FHIR Output (JSON)</label>
+          <pre id="v2-output" class="output-box"></pre>
+          <div id="v2-warnings" class="warnings hidden"></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="runV22FHIR()">▶ Convert</button>
+    </section>
+  </main>
+
+  <footer><p>FHIR ↔ HL7v2 Engine</p></footer>
+  <script src="/static/js/app.js"></script>
+  <script>
+    function switchDir(name, btn) {
+      document.querySelectorAll("section[id^='panel-']").forEach(s => s.classList.add("hidden"));
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.getElementById(`panel-${name}`).classList.remove("hidden");
+      btn.classList.add("active");
+    }
+
+    async function runFhir2V2() {
+      let fhirResource;
+      try {
+        fhirResource = JSON.parse(document.getElementById("fhir-input").value);
+      } catch {
+        alert("Invalid JSON in FHIR input.");
+        return;
+      }
+      const payload = {
+        fhir_resource: fhirResource,
+        message_type: document.getElementById("fhir-msg-type").value,
+        concept_map_id: document.getElementById("fhir-map-sel").value || null,
+      };
+      const resp = await postJSON("/convert/fhir-to-v2", payload);
+      const data = await resp.json();
+      if (resp.ok) {
+        document.getElementById("fhir-output").textContent = data.result;
+        showWarnings("fhir-warnings", data.warnings);
+      } else {
+        document.getElementById("fhir-output").textContent = "Error: " + JSON.stringify(data, null, 2);
+      }
+    }
+
+    async function runV22FHIR() {
+      const payload = {
+        v2_message: document.getElementById("v2-input").value,
+        target_resource_type: document.getElementById("v2-resource-type").value,
+        concept_map_id: document.getElementById("v2-map-sel").value || null,
+      };
+      const resp = await postJSON("/convert/v2-to-fhir", payload);
+      const data = await resp.json();
+      if (resp.ok) {
+        document.getElementById("v2-output").textContent = JSON.stringify(data.result, null, 2);
+        showWarnings("v2-warnings", data.warnings);
+      } else {
+        document.getElementById("v2-output").textContent = "Error: " + JSON.stringify(data, null, 2);
+      }
+    }
+
+    function showWarnings(elId, warnings) {
+      const el = document.getElementById(elId);
+      if (warnings && warnings.length) {
+        el.textContent = "⚠ " + warnings.join("\n⚠ ");
+        el.classList.remove("hidden");
+      } else {
+        el.classList.add("hidden");
+      }
+    }
+
+    function loadFHIRExample() {
+      document.getElementById("fhir-input").value = JSON.stringify({
+        resourceType: "Patient",
+        id: "pt-001",
+        identifier: [{ use: "usual", value: "MRN-12345" }],
+        name: [{ family: "Smith", given: ["John"] }],
+        gender: "male",
+        birthDate: "1980-06-15"
+      }, null, 2);
+    }
+
+    function loadV2Example() {
+      document.getElementById("v2-input").value =
+        "MSH|^~\\&|SEND|FAC|REC|FAC|20260101120000||ADT^A01|MSG001|P|2.5\r" +
+        "EVN||20260101120000\r" +
+        "PID|1|MRN-12345|pt-001||Smith^John|||19800615|M";
+    }
+  </script>
+</body>
+</html>
