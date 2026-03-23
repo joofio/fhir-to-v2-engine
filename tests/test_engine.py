@@ -281,6 +281,81 @@ def test_v2_to_fhir_unknown_map_id():
 
 
 # ---------------------------------------------------------------------------
+# Auto-detection: HL7v2 → FHIR (no target_resource_type provided)
+# ---------------------------------------------------------------------------
+
+def test_v2_auto_detect_patient_from_adt():
+    """ADT message with PID → auto-detected as Patient."""
+    resp = client.post(
+        "/convert/v2-to-fhir",
+        json={"v2_message": V2_PATIENT_MSG},  # no target_resource_type
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["source_format"] == "HL7v2"
+    assert result["target_format"] == "FHIR"
+    fhir = result["result"]
+    assert fhir["resourceType"] == "Patient"
+    assert fhir.get("id") == "pt-001"
+
+
+def test_v2_auto_detect_bundle_from_oru():
+    """ORU message with both PID and OBX → auto-detected as Bundle."""
+    oru_msg = (
+        "MSH|^~\\&|SEND|FAC|REC|FAC|20260101120000||ORU^R01|MSG003|P|2.5\r"
+        "PID|1|MRN-002|pt-002||Doe^Jane||19900101|F\r"
+        "OBX|1|NM|8867-4^Heart rate^LN||60|bpm"
+    )
+    resp = client.post(
+        "/convert/v2-to-fhir",
+        json={"v2_message": oru_msg},  # no target_resource_type
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    fhir = result["result"]
+    assert fhir["resourceType"] == "Bundle"
+    resource_types = [e["resource"]["resourceType"] for e in fhir["entry"]]
+    assert "Patient" in resource_types
+    assert "Observation" in resource_types
+
+
+def test_v2_auto_detect_explicit_auto_string():
+    """Passing target_resource_type='auto' is equivalent to omitting it."""
+    resp = client.post(
+        "/convert/v2-to-fhir",
+        json={"v2_message": V2_PATIENT_MSG, "target_resource_type": "auto"},
+    )
+    assert resp.status_code == 200
+    fhir = resp.json()["result"]
+    assert fhir["resourceType"] == "Patient"
+
+
+# ---------------------------------------------------------------------------
+# Generic FHIR → HL7v2 (unsupported resource type)
+# ---------------------------------------------------------------------------
+
+def test_fhir_generic_resource_produces_nte_segments():
+    """Unknown FHIR resource types are encoded as NTE segments (not dropped)."""
+    medication = {
+        "resourceType": "Medication",
+        "id": "med-001",
+        "code": {"text": "Aspirin 100 mg"},
+        "status": "active",
+    }
+    resp = client.post(
+        "/convert/fhir-to-v2",
+        json={"fhir_resource": medication},
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    v2 = result["result"]
+    assert "MSH" in v2
+    assert "NTE" in v2
+    assert "Medication" in v2
+    assert len(result["warnings"]) > 0
+
+
+# ---------------------------------------------------------------------------
 # Frontend pages (smoke tests)
 # ---------------------------------------------------------------------------
 

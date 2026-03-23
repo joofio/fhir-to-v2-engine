@@ -62,7 +62,7 @@ class ConvertV2ToFHIRRequest(BaseModel):
 
     v2_message: str
     concept_map_id: str | None = None
-    target_resource_type: str = "Patient"
+    target_resource_type: str | None = None
 
 
 class ConversionResult(BaseModel):
